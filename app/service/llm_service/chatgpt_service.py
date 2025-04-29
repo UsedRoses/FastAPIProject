@@ -11,10 +11,6 @@ from models.entity.exception import ServiceException
 from utils.aiohttp_client_util import client
 
 RSA_PUBLIC_KEY = """-----BEGIN PUBLIC KEY-----
-MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDa2oPxMZe71V4dw2r8rHWt59gH
-W5INRmlhepe6GUanrHykqKdlIB4kcJiu8dHC/FJeppOXVoKz82pvwZCmSUrF/1yr
-rnmUDjqUefDu8myjhcbio6CnG5TtQfwN2pz3g6yHkLgp8cFfyPSWwyOCMMMsTU9s
-snOjvdDb4wiZI8x3UwIDAQAB
 -----END PUBLIC KEY-----"""
 
 GPT_API_URL = "https://extensiondock.com/chatgpt/v4/question"

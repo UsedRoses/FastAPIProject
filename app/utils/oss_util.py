@@ -1,4 +1,4 @@
-import requests
+from aliyunsdkcore import client as aliyunclient
 import oss2
 import json
 import mimetypes
@@ -148,7 +148,7 @@ def get_sts_token():
     #     ]
     # }
     # '''
-    clt = client.AcsClient(access_key_id, access_key_secret, OSS_REGION)
+    clt = aliyunclient.AcsClient(access_key_id, access_key_secret, OSS_REGION)
     req = AssumeRoleRequest()
 
     # 设置返回值格式为JSON。
