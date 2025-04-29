@@ -1,0 +1,10 @@
+FROM registry-vpc.us-west-1.aliyuncs.com/zingfront/fastapi-storyviewer-base
+
+
+# 复制代码
+COPY ./app /code/app
+WORKDIR /code/app
+# 启动命令
+# 开放80端口
+# 日志级别设置为warning，运行日志会输出到标准输出
+CMD ["uvicorn", "main:app", "--proxy-headers", "--host", "0.0.0.0", "--port", "80", "--log-level", "warning","--env-file",".env.prod"]
