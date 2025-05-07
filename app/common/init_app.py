@@ -51,13 +51,13 @@ def register_routers(app: FastAPI, routers_dir: str):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await mysql_startup()
-    await redis_startup()
+    # await mysql_startup()
+    # await redis_startup()
 
     yield
 
-    await mysql_shutdown()
-    await redis_shutdown()
+    # await mysql_shutdown()
+    # await redis_shutdown()
     await close_client()
 
 

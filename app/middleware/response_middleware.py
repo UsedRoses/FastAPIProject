@@ -9,6 +9,18 @@ import json
 class ResponseMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
+
+        if response.media_type:
+            content_type = response.media_type
+        else:
+            content_type = response.headers.get("content-type", "")
+
+        # 如果是 SSE 流式传输，直接返回
+        if content_type.startswith("text/event-stream"):
+            return response
+        elif content_type.startswith("text/html"):
+            return response
+
         if response.status_code in [200, 201, 204]:
             # 创建一个BytesIO流来保存修改后的内容
             response_body = b""
@@ -31,6 +43,6 @@ class ResponseMiddleware(BaseHTTPMiddleware):
             headers = dict(response.headers)
             headers.pop("content-length")
             # 将流数据封装到 ResponseModel 中
-            response_model = ResponseModel(code=ReturnCode.Success.value, message="Success", data=cleaned_data)
-            return JSONResponse(status_code=200, content=response_model.dict(), headers=headers)
+            response_model = ResponseModel(code=ReturnCode.SUCCESS.value, message="Success", data=cleaned_data)
+            return JSONResponse(status_code=200, content=response_model.model_dump(), headers=headers)
         return response

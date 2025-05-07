@@ -2,7 +2,7 @@ from tortoise import Tortoise
 from tortoise.router import ConnectionRouter
 
 from common.public_configuration.public_settings import settings
-from models.table import user, picture_book
+from models.table import user
 
 
 async def mysql_startup():
@@ -37,7 +37,7 @@ async def mysql_startup():
         },
         'apps': {
             'default': {
-                'models': [user, picture_book],
+                'models': [user],
                 # If no default_connection specified, defaults to 'default'
                 'default_connection': 'default',
             },
