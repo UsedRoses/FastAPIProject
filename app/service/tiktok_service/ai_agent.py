@@ -9,7 +9,7 @@ from langgraph.prebuilt import ToolNode, tools_condition, create_react_agent
 
 model = ChatDeepSeek(model="deepseek-chat", api_key="sk-******")
 
-API_TOKEN = "apify_api_cal5qEfaYuiQc6CINlxBUA0PEg4Tk40AYQah"
+API_TOKEN = "apify_api_***"
 ACTOR_NAME = "scrape-creators/best-tiktok-transcripts-scraper"
 SSE_URL = f"https://actors-mcp-server.apify.actor/sse?token={API_TOKEN}&actors={ACTOR_NAME}"
 
@@ -18,7 +18,7 @@ async def build_graph():
         "actors-mcp-server": {
                 "transport": "sse",
                 "url": f"https://actors-mcp-server.apify.actor/sse?token={API_TOKEN}&actors=scrape-creators/best-tiktok-transcripts-scraper",
-                "message_endpoint": f"/message?token={API_TOKEN}",
+                "message_endpoint": f"/message",
                 "headers": {
                     "Authorization": f"Bearer {API_TOKEN}"
                 },
