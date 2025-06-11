@@ -8,9 +8,7 @@ from langchain_deepseek import ChatDeepSeek
 from langgraph.store.base import BaseStore
 from langgraph.store.memory import InMemoryStore
 from sentence_transformers import SentenceTransformer
-from fastapi import FastAPI
 from pydantic import BaseModel
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, MessagesState, END, START
@@ -43,10 +41,11 @@ model_embed = SentenceTransformer("all-MiniLM-L6-v2")
 model_chat = ChatDeepSeek(model="deepseek-chat")
 
 # 加载塔罗牌数据与索引
-with open("app/service/tarot_deck_service/tarot-images.json", "r", encoding="utf-8") as f:
-    card_refs = json.load(f)
-    card_refs = card_refs["cards"]
-index = faiss.read_index("app/service/tarot_deck_service/tarot.index")
+# with open("app/service/tarot_deck_service/tarot-images.json", "r", encoding="utf-8") as f:
+#     card_refs = json.load(f)
+#     card_refs = card_refs["cards"]
+# index = faiss.read_index("app/service/tarot_deck_service/tarot.index")
+index = None
 
 class TarotQuery(BaseModel):
     user_id: str
@@ -168,7 +167,6 @@ builder.add_edge("record_result", END)
 
 # Store for long-term (across-thread) memory
 across_thread_memory = InMemoryStore()
-
 # Checkpointer for short-term (within-thread) memory
 within_thread_memory = MemorySaver()
 

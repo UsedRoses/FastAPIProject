@@ -7,9 +7,9 @@ from langgraph.constants import START
 from langgraph.graph import MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition, create_react_agent
 
-model = ChatDeepSeek(model="deepseek-chat", api_key="sk-******")
+model = ChatDeepSeek(model="deepseek-chat", api_key="sk-**")
 
-API_TOKEN = "apify_api_***"
+API_TOKEN = "apify_api_**"
 ACTOR_NAME = "scrape-creators/best-tiktok-transcripts-scraper"
 SSE_URL = f"https://actors-mcp-server.apify.actor/sse?token={API_TOKEN}&actors={ACTOR_NAME}"
 
