@@ -349,6 +349,10 @@ class BYTETracker:
         return matches, unmatched_a, unmatched_b
 
     def iou_distance(self, atracks, btracks):
+        """
+        计算两组轨迹之间的 IoU 距离
+        """
+        # 1. 提取坐标 (tlbr: top-left-bottom-right)
         if (len(atracks) > 0 and isinstance(atracks[0], np.ndarray)) or \
                 (len(btracks) > 0 and isinstance(btracks[0], np.ndarray)):
             atlbrs = atracks
@@ -357,7 +361,20 @@ class BYTETracker:
             atlbrs = [track.tlbr for track in atracks]
             btlbrs = [track.tlbr for track in btracks]
 
-        _ious = iou_batch(np.array(atlbrs), np.array(btlbrs))
+        # --- 核心修复开始 ---
+        # 务必先转换为 numpy 数组
+        atlbrs = np.array(atlbrs)
+        btlbrs = np.array(btlbrs)
+
+        # 关键逻辑：如果数组为空，强制 Reshape 为 (0, 4)
+        # 这样 NumPy 就能正确处理 [:, 2] 这种切片操作，而不会报错
+        if len(atlbrs) == 0:
+            atlbrs = atlbrs.reshape(0, 4)
+        if len(btlbrs) == 0:
+            btlbrs = btlbrs.reshape(0, 4)
+        # --- 核心修复结束 ---
+
+        _ious = iou_batch(atlbrs, btlbrs)
         cost_matrix = 1 - _ious
         return cost_matrix
 
