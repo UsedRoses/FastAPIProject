@@ -412,7 +412,21 @@ def sub_stracks(tlista, tlistb):
 
 
 def remove_duplicate_stracks(stracksa, stracksb):
-    pdist = iou_batch(np.array([t.tlbr for t in stracksa]), np.array([t.tlbr for t in stracksb]))
+    # --- 核心修复开始 ---
+    # 1. 先生成 numpy 数组
+    sa = np.array([t.tlbr for t in stracksa])
+    sb = np.array([t.tlbr for t in stracksb])
+
+    # 2. 强制形状检查：如果为空，reshape 成 (0, 4)
+    # 这样 iou_batch 里的切片操作 [:, 2] 就不会报错了
+    if len(sa) == 0:
+        sa = sa.reshape(0, 4)
+    if len(sb) == 0:
+        sb = sb.reshape(0, 4)
+
+    pdist = iou_batch(sa, sb)
+    # --- 核心修复结束 ---
+
     pairs = np.where(pdist < 0.15)
     dupa, dupb = list(), list()
     for p, q in zip(*pairs):
