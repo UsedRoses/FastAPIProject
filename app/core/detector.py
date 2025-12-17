@@ -87,7 +87,6 @@ class YOLOXDetector:
                     score = det[4] * det[5]
                     detections.append([det[0], det[1], det[2], det[3], score])
 
-        # --- 修复代码开始 ---
         # 强制转换为 numpy 数组
         final_dets = np.array(detections)
 
@@ -95,5 +94,5 @@ class YOLOXDetector:
         # 如果是空的，变成 (0, 5)；如果不为空，变成 (N, 5)
         if len(final_dets) == 0:
             return np.empty((0, 5))
-        else:
-            return final_dets
+
+        return final_dets

@@ -1,5 +1,6 @@
 import os
 import shutil
+import traceback
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from app.core.engine import SmartReframer
 
@@ -54,7 +55,14 @@ async def reframe_video(background_tasks: BackgroundTasks, file: UploadFile = Fi
             "output_path": result_path
         }
     except Exception as e:
+        error_msg = traceback.format_exc()
+        print("!!!!!!!!!!! 发生严重错误 !!!!!!!!!!!")
+        print(error_msg)
+        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+
+        # 返回给前端，方便查看
         return {
             "status": "error",
-            "message": str(e)
+            "message": f"Server Error: {str(e)}",
+            "traceback": error_msg
         }

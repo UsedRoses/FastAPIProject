@@ -85,7 +85,7 @@ class SmartReframer:
         cap = cv2.VideoCapture(input_path)
 
         # 预热滤波器：初始位置设为画面中心
-        current_x = src_w / 2
+        self.smoother = OneEuroFilter(t0=0, x0=src_w/2, min_cutoff=0.05, beta=0.005)
 
         for i in range(total_frames):
             ret, frame = cap.read()
