@@ -1,5 +1,5 @@
 # 封装 ByteTrack (Tracking)
-from yolox.tracker.byte_tracker import BYTETracker
+from app.core.byte_tracker import BYTETracker
 from dataclasses import dataclass
 
 
