@@ -66,8 +66,8 @@ class YOLOXDetector:
             # 后处理：NMS (非极大值抑制)
             outputs = postprocess(
                 outputs,
-                num_classes=80,  # COCO 类别数
-                conf_thre=0.25,  # 置信度阈值 (高质量建议 0.25-0.3)
+                num_classes=80,
+                conf_thre=0.25,
                 nms_thre=0.45,
                 class_agnostic=True
             )
@@ -87,4 +87,13 @@ class YOLOXDetector:
                     score = det[4] * det[5]
                     detections.append([det[0], det[1], det[2], det[3], score])
 
-        return np.array(detections)
+        # --- 修复代码开始 ---
+        # 强制转换为 numpy 数组
+        final_dets = np.array(detections)
+
+        # 如果数组为空，或者变成了一维数组（防止奇怪的边缘情况），强制 reshape 成 (N, 5)
+        # 如果是空的，变成 (0, 5)；如果不为空，变成 (N, 5)
+        if len(final_dets) == 0:
+            return np.empty((0, 5))
+        else:
+            return final_dets

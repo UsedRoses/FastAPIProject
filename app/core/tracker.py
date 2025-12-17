@@ -23,7 +23,7 @@ class VideoTracker:
         """
         # ByteTracker 需要的输入格式是 Tensor 或者特定的 numpy 结构
         # 这里直接传 numpy 即可，YOLOX 的实现里处理了
-        if len(detections) == 0:
+        if detections is None or len(detections) == 0:
             return []
 
         # update 返回的是 STrack 对象列表
