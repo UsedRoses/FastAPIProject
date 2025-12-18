@@ -35,7 +35,8 @@ async def reframe_video(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     ratio: str = Form("9:16", description="裁剪比例，如 9:16, 4:3, 1:1"),
-    mode: str = Form("normal", description="运镜模式: fast(运动), normal(标准), stable(访谈)")
+    mode: str = Form("normal", description="运镜模式: fast(运动), normal(标准), stable(访谈)"),
+    target: str = Form("person", description="追踪主体，如: person, cat, dog")
 ):
     """
     智能剪辑接口
@@ -62,7 +63,8 @@ async def reframe_video(
             input_path,
             output_path,
             ratio_str=ratio,
-            mode=mode
+            mode=mode,
+            detect_target=target
         )
         return {
             "status": "success",

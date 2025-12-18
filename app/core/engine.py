@@ -20,6 +20,42 @@ SMOOTHING_PRESETS = {
     "stable": {"min_cutoff": 0.005, "beta": 0.0005}  # 【访谈模式】讲座、新闻：如定海神针，几乎不动，除非大幅移动
 }
 
+# COCO 数据集 80 类名称映射表
+COCO_CLASSES = (
+    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat", "traffic light",
+    "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
+    "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",
+    "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard",
+    "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
+    "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch",
+    "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote", "keyboard", "cell phone",
+    "microwave", "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase", "scissors", "teddy bear",
+    "hair drier", "toothbrush"
+)
+
+
+# 辅助函数：把名字转 ID
+def get_ids_by_names(names_str):
+    # 输入 "cat,dog" -> 输出 [15, 16]
+    target_ids = []
+    # 默认只找人
+    if not names_str:
+        return [0]
+
+    for name in names_str.split(","):
+        name = name.strip().lower()
+        try:
+            idx = COCO_CLASSES.index(name)
+            target_ids.append(idx)
+        except ValueError:
+            logger.warning(f"未知类别: {name}，已忽略。")
+
+    # 如果没找到任何合法的，兜底找人
+    if not target_ids:
+        logger.warning("未找到有效类别，回退到默认(person)")
+        return [0]
+    return target_ids
+
 class SmartReframer:
     def __init__(self, model_path, device="cuda"):
         # 初始化 AI 模型
@@ -63,13 +99,17 @@ class SmartReframer:
         best_track = max(tracks, key=lambda t: t['bbox'][2] * t['bbox'][3])
         return best_track, best_track['id']
 
-    def process_video(self, input_path, output_path, ratio_str="9:16", mode="normal"):
+    def process_video(self, input_path, output_path, ratio_str="9:16", mode="normal", detect_target="person"):
         """
         核心流程入口
         ratio_str: "9:16", "4:3", "1:1", "16:9" 等字符串
         mode: "fast", "normal", "stable"
         """
-        logger.info(f"开始处理视频: {input_path} | 比例: {ratio_str} | 模式: {mode}")
+        logger.info(f"开始处理视频: {input_path} | 比例: {ratio_str} | 模式: {mode} | 目标: {detect_target}")
+
+        # --- 解析类别 ID ---
+        target_ids = get_ids_by_names(detect_target)
+        logger.info(f"追踪类别 ID: {target_ids}")
 
         # 1. 获取视频信息
         src_w, src_h, fps, total_frames = self._get_video_info(input_path)
@@ -116,7 +156,7 @@ class SmartReframer:
             if not ret: break
 
             # 1. 检测
-            detections = self.detector.detect(frame)
+            detections = self.detector.detect(frame, target_ids=target_ids)
 
             # 2. 跟踪
             tracks = self.tracker.update(detections, (src_h, src_w))

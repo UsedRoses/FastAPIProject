@@ -10,7 +10,7 @@ from yolox.utils import postprocess
 
 
 class YOLOXDetector:
-    def __init__(self, model_path, model_name="yolox-l", device="cpu"):
+    def __init__(self, model_path, model_name="yolox-l", device=None):
         # 自动判断设备
         if device is None:
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -41,18 +41,16 @@ class YOLOXDetector:
         self.test_size = (640, 640)  # YOLOX 标准输入尺寸
         self.preproc = ValTransform(legacy=False)
 
-    def detect(self, img):
+    def detect(self, img, target_ids=[0]):
         """
         输入: 原始 OpenCV 图片 (H, W, 3)
         输出: 检测框列表 [[x1, y1, x2, y2, score, class_id], ...]
+        target_ids: 要保留的类别 ID 列表。默认 [0] (人)
         """
         height, width = img.shape[:2]
 
         # 预处理：Resize 和 Pad
-        img_info = {"id": 0}
-        img_info["height"] = height
-        img_info["width"] = width
-        img_info["raw_img"] = img
+        img_info = {"id": 0, "height": height, "width": width, "raw_img": img}
 
         ratio = min(self.test_size[0] / img_info["height"], self.test_size[1] / img_info["width"])
         img_info["ratio"] = ratio
@@ -82,7 +80,8 @@ class YOLOXDetector:
             # output 格式: [x1, y1, x2, y2, obj_conf, class_conf, class_pred]
             for det in output:
                 # det[6] 是类别索引
-                if int(det[6]) == 0:
+                class_id = int(det[6])
+                if class_id in target_ids:
                     # 重新组合: x1, y1, x2, y2, score
                     score = det[4] * det[5]
                     detections.append([det[0], det[1], det[2], det[3], score])
