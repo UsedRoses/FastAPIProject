@@ -112,7 +112,7 @@ class SmartReframer:
         if multi_subject:
             return self._process_multi_mode(input_path, output_path, ratio_str, mode, detect_target)
         else:
-            # 兼容旧的单回传值，为了统一接口，我们把单路径也包在列表里
+            # 兼容旧的单回传值，为了统一接口，单路径也包在列表里
             path = self._process_single_mode(input_path, output_path, ratio_str, mode, detect_target)
             return [path]
 
@@ -132,7 +132,7 @@ class SmartReframer:
 
         logger.info(f"尺寸: {src_w}x{src_h} -> {target_w}x{target_h}")
 
-        # --- 第一阶段：分析 (Pass 1 - Analysis) ---
+        # --- 第一阶段：分析  ---
         logger.info("阶段 1/2: 智能分析运镜路径...")
 
         camera_path = []  # 存储每一帧的 crop_x 坐标
@@ -154,18 +154,17 @@ class SmartReframer:
 
             # 4. 计算目标中心点
             if subject:
-                # 目标的中心 x
-                tx, ty = subject['center'] # 获取 x 和 y
+                # 获取 x 和 y
+                tx, ty = subject['center']
             else:
                 # 没人？缓慢回归到画面正中心
-                tx, ty = src_w / 2, src_h / 2 # 回归中心
+                tx, ty = src_w / 2, src_h / 2
 
 
             # timestamp 使用帧号/FPS
             timestamp = i / fps
 
-            # 5. 应用 One-Euro 滤波 (去抖动)
-            # --- 3. 双轴滤波与计算 ---
+            # --- 双轴滤波与计算 ---
             sx = self.smoother_x(timestamp, tx)
             sy = self.smoother_y(timestamp, ty)
 
