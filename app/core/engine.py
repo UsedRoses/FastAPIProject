@@ -330,7 +330,7 @@ class SmartReframer:
             '-i', '-',  # Input 0: 来自 Python 的管道
             '-i', input_path,  # Input 1: 原视频 (用于取音频)
             '-map', '0:v',
-            '-map', '1:a',  # 只要音频流
+            '-map', '1:a?',  # 只要音频流 如果没音频就不复制
             '-c:v', 'libx264',
             '-preset', 'slow',  # 慢速编码，高质量
             '-crf', '18',  # 视觉无损级别
