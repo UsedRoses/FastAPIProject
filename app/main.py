@@ -3,6 +3,7 @@ import shutil
 import traceback
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from app.core.engine import SmartReframer
+from fastapi.staticfiles import StaticFiles
 
 app = FastAPI()
 
@@ -66,3 +67,5 @@ async def reframe_video(background_tasks: BackgroundTasks, file: UploadFile = Fi
             "message": f"Server Error: {str(e)}",
             "traceback": error_msg
         }
+
+app.mount("/videos", StaticFiles(directory=TEMP_DIR), name="videos")
