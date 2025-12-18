@@ -81,7 +81,8 @@ class YOLOXDetector:
             for det in output:
                 # det[6] 是类别索引
                 class_id = int(det[6])
-                if class_id in target_ids:
+                # 如果 target_ids 里有 -1，则不过滤，全部放行
+                if -1 in target_ids or class_id in target_ids:
                     # 重新组合: x1, y1, x2, y2, score
                     score = det[4] * det[5]
                     detections.append([det[0], det[1], det[2], det[3], score])

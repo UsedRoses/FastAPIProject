@@ -34,6 +34,9 @@ COCO_CLASSES = (
 
 # 辅助函数：把名字转 ID
 def get_ids_by_names(names_str):
+    if names_str.strip().lower() == "all":
+        return [-1]
+
     # 输入 "cat,dog" -> 输出 [15, 16]
     target_ids = []
     # 默认只找人
