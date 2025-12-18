@@ -1,7 +1,7 @@
 import os
 import shutil
 import traceback
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form
 from app.core.engine import SmartReframer
 from fastapi.staticfiles import StaticFiles
 
@@ -31,9 +31,17 @@ def health_check():
     return {"status": "healthy"}
 
 @app.post("/reframe")
-async def reframe_video(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def reframe_video(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    ratio: str = Form("9:16", description="裁剪比例，如 9:16, 4:3, 1:1"),
+    mode: str = Form("normal", description="运镜模式: fast(运动), normal(标准), stable(访谈)")
+):
     """
-    接收视频 -> 保存 -> 自动剪辑 -> 返回输出路径
+    智能剪辑接口
+    - file: 视频文件
+    - ratio: 目标比例 (默认 9:16)
+    - mode: 运镜模式 (默认 normal)
     """
     # 1. 保存上传的视频
     input_filename = f"input_{file.filename}"
@@ -43,13 +51,19 @@ async def reframe_video(background_tasks: BackgroundTasks, file: UploadFile = Fi
         shutil.copyfileobj(file.file, buffer)
 
     # 2. 定义输出路径
-    output_filename = f"reframed_{file.filename}"
+    safe_ratio = ratio.replace(":", "x")
+    output_filename = f"reframed_{safe_ratio}_{mode}_{file.filename}"
     output_path = os.path.join(TEMP_DIR, output_filename)
 
-    # 3. 运行处理 (这是一个耗时操作，生产环境建议放入 Celery 队列)
+    # 3. 运行处理 (这是一个耗时操作，生产环境建议放入 任务 队列)
     # 这里演示直接调用
     try:
-        result_path = engine.process_video(input_path, output_path, target_ratio=(9, 16))
+        result_path = engine.process_video(
+            input_path,
+            output_path,
+            ratio_str=ratio,
+            mode=mode
+        )
         return {
             "status": "success",
             "message": "Video reframed successfully",
