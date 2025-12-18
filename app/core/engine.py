@@ -316,24 +316,24 @@ class SmartReframer:
         # 构建 FFmpeg 命令
         # -c:v libx264 -preset slow -crf 18: 保证高质量
         # -map 0:v -map 1:a: 视频来自 pipe(0)，音频来自原文件(1)
-        video_encoder = 'h264_nvenc'
 
         cmd = [
             'ffmpeg', '-y',
             '-f', 'rawvideo',
             '-vcodec', 'rawvideo',
-            '-s', f'{w}x{h}',
-            '-pix_fmt', 'bgr24',
+            '-s', f'{w}x{h}',  # 输入分辨率 (裁剪后的)
+            '-pix_fmt', 'bgr24',  # OpenCV 默认格式
             '-r', str(fps),
-            '-i', '-',
-            '-i', input_path,
-            '-map', '0:v', '-map', '1:a',
-            '-c:v', video_encoder,
-            '-preset', 'p4',
-            '-b:v', '5M',
-            '-pix_fmt', 'yuv420p',
-            '-c:a', 'aac', '-b:a', '192k',
-            '-shortest',
+            '-i', '-',  # Input 0: 来自 Python 的管道
+            '-i', input_path,  # Input 1: 原视频 (用于取音频)
+            '-map', '0:v',
+            '-map', '1:a',  # 只要音频流
+            '-c:v', 'libx264',
+            '-preset', 'slow',  # 慢速编码，高质量
+            '-crf', '18',  # 视觉无损级别
+            '-c:a', 'aac',
+            '-b:a', '192k',
+            '-shortest',  # 以最短的流为结束（防止音频比视频长）
             output_path
         ]
 
