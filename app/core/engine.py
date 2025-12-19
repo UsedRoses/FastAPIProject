@@ -211,13 +211,15 @@ class SmartReframer:
             if i % 100 == 0: logger.info(f"Scanning All: {i}/{total_frames}")
         cap.release()
 
-        # 2. 筛选有效 ID (例如：出现时长超过视频总长的 15%)
-        # 访谈类节目，主角通常会一直存在
-        min_duration = total_frames * 0.15
-        valid_ids = []
-        for tid, history in raw_tracks_history.items():
-            if len(history) > min_duration:
-                valid_ids.append(tid)
+        # 2. 筛选
+        absolute_min_frames = 30
+        sorted_candidates = sorted(
+            [(tid, len(h)) for tid, h in raw_tracks_history.items() if len(h) > absolute_min_frames],
+            key=lambda x: x[1],
+            reverse=True
+        )
+        valid_ids = [x[0] for x in sorted_candidates]
+        logger.info(f"检测到的主体排序: {sorted_candidates}")
 
         if not valid_ids:
             logger.warning("未检测到常驻主体，回退到单人模式")
@@ -238,27 +240,50 @@ class SmartReframer:
             # 上半屏(副视角): ID 2 (如果没有第二个ID，就用固定画面或ID 1)
             id_top = sorted_ids[1] if len(sorted_ids) > 1 else None
 
-            # 初始化两套滤波器
-            self._init_smoothers(src_w, src_h, mode)  # Bottom 用
-            smoother_top_x = OneEuroFilter(t0=0, x0=src_w / 2, min_cutoff=0.05, beta=0.005)  # Top 用
-            smoother_top_y = OneEuroFilter(t0=0, x0=src_h / 2, min_cutoff=0.05, beta=0.005)
-
-            path_bottom = []
-            path_top = []
-
             # === 智能比例分配 ===
             if id_top is not None:
                 # 场景：两人对谈 -> 50% : 50%
                 split_ratio = 0.5
-                logger.info("检测到双主体，使用 50/50 分屏")
+                logger.info(f"双主体分屏: Bottom(ID={id_bottom}), Top(ID={id_top})")
             else:
                 # 场景：单人 + 背景/PPT -> 65% : 35% (人更大)
                 split_ratio = 0.65
-                logger.info("检测到单主体，使用 65/35 分屏 (主体优先)")
+                logger.info(f"单主体分屏: Bottom(ID={id_bottom})")
 
             # 计算具体高度
             h_bottom = int(target_h * split_ratio)
             h_top = target_h - h_bottom
+
+            # 找到 id_bottom 第一次出现的坐标
+            start_pos_bottom = self._get_first_position(id_bottom, raw_tracks_history, src_w, src_h)
+
+            # 找到 id_top 第一次出现的坐标 (如果不存在则用计算逻辑)
+            if id_top:
+                start_pos_top = self._get_first_position(id_top, raw_tracks_history, src_w, src_h)
+            else:
+                # 单人模式背景逻辑：如果主体在左，背景初始在右
+                if start_pos_bottom[0] < src_w / 2:
+                    start_pos_top = (src_w * 0.75, src_h / 2)
+                else:
+                    start_pos_top = (src_w * 0.25, src_h / 2)
+
+            # --- 使用正确位置初始化滤波器 ---
+            preset = SMOOTHING_PRESETS.get(mode, SMOOTHING_PRESETS["normal"])
+
+            # Bottom Filter
+            self.smoother_x = OneEuroFilter(t0=0, x0=start_pos_bottom[0], min_cutoff=preset["min_cutoff"],
+                                            beta=preset["beta"])
+            self.smoother_y = OneEuroFilter(t0=0, x0=start_pos_bottom[1], min_cutoff=preset["min_cutoff"],
+                                            beta=preset["beta"])
+
+            # Top Filter (现在参数和 Bottom 保持一致，更稳定)
+            smoother_top_x = OneEuroFilter(t0=0, x0=start_pos_top[0], min_cutoff=preset["min_cutoff"],
+                                           beta=preset["beta"])
+            smoother_top_y = OneEuroFilter(t0=0, x0=start_pos_top[1], min_cutoff=preset["min_cutoff"],
+                                           beta=preset["beta"])
+
+            path_bottom = []
+            path_top = []
 
             # 记录上一次的有效位置 (补偿逻辑主体丢失的问题)
             last_valid_bottom = (src_w / 2, src_h / 2)
@@ -286,21 +311,19 @@ class SmartReframer:
                     bbox = raw_tracks_history[id_top][i]
                     tx2, ty2 = self._calc_smart_center(bbox)
                     last_valid_top = (tx2, ty2)
-                elif id_top is None:
-                    # 单人模式：Top 显示背景，取离 Bottom 最远的一侧
-                    # 简单策略：如果 Bottom 在左，Top 取右；反之亦然
-                    # 这里用平滑后的 sx 来判断当前主体位置
-                    if sx < src_w / 2:
-                        tx2 = src_w * 0.75  # 主体在左，背景取右侧 3/4 处
-                    else:
-                        tx2 = src_w * 0.25  # 主体在右，背景取左侧 1/4 处
-                    ty2 = src_h / 2
-                else:
-                    # 双人模式下 ID 2 丢失：保持最后位置
+                elif id_top:
                     tx2, ty2 = last_valid_top
+                else:
+                    # 单人背景逻辑 (反向跟随)
+                    if sx < src_w / 2:
+                        tx2 = src_w * 0.75
+                    else:
+                        tx2 = src_w * 0.25
+                    ty2 = src_h / 2
 
                 sx2 = smoother_top_x(ts, tx2)
                 sy2 = smoother_top_y(ts, ty2)
+                # 注意传入 h_top
                 path_top.append(self._calc_crop_xy(sx2, sy2, target_w, h_top, src_w, src_h))
 
             # 渲染分屏
@@ -335,6 +358,30 @@ class SmartReframer:
                 self._render_with_ffmpeg(input_path, sub_out, id_path, target_w, target_h, fps)
                 generated.append(sub_out)
             return generated
+
+    def _get_first_position(self, tid, history, src_w, src_h):
+        """
+        获取某个 ID 第一次出现的智能中心坐标。
+        tid: 目标 ID
+        history: 完整的轨迹字典 {id: {frame: bbox}}
+        """
+        # 1. 安全检查：确保 ID 存在
+        if tid not in history:
+            return (src_w / 2, src_h / 2)
+
+        # 2. 获取该 ID 的专属轨迹 {frame: bbox}
+        id_history = history[tid]
+
+        # 3. 对帧号排序，找到第一帧
+        frames = sorted(id_history.keys())
+        if not frames:
+            return (src_w / 2, src_h / 2)
+
+        first_frame = frames[0]
+        bbox = id_history[first_frame]
+
+        # 4. 计算那一帧的智能重心
+        return self._calc_smart_center(bbox)
 
     def _calc_target_size(self, src_w, src_h, ratio_str):
         # --- 1. 智能尺寸计算 ---
