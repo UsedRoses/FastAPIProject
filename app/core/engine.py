@@ -304,7 +304,7 @@ class SmartReframer:
                 path_top.append(self._calc_crop_xy(sx2, sy2, target_w, h_top, src_w, src_h))
 
             # 渲染分屏
-            self._render_split_screen_cv2(input_path, output_path, path_top, path_bottom, target_w, target_h, fps)
+            self._render_split_screen_cv2(input_path, output_path, path_top, path_bottom, target_w, target_h, h_top, h_bottom, fps)
             return [output_path]
         else:
             # --- 不开分屏模式 ---
