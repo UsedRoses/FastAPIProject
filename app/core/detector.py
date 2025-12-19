@@ -38,7 +38,7 @@ class YOLOXDetector:
         self.model.eval()
 
         # 3. 预处理参数
-        self.test_size = (640, 640)  # YOLOX 标准输入尺寸
+        self.test_size = (1280, 1280)   # YOLOX 标准输入尺寸
         self.preproc = ValTransform(legacy=False)
 
     def detect(self, img, target_ids=[0]):
@@ -65,7 +65,7 @@ class YOLOXDetector:
             outputs = postprocess(
                 outputs,
                 num_classes=80,
-                conf_thre=0.25,
+                conf_thre=0.15,
                 nms_thre=0.45,
                 class_agnostic=True
             )
