@@ -95,7 +95,7 @@ class SmartReframer:
 
         return center_x, smart_center_y
 
-    def process_video(self, input_path, output_path, ratio_str="9:16", mode="normal", detect_target="person", multi_subject=False, split_screen=False):
+    def process_video(self, input_path, output_path, ratio_str="9:16", mode="normal", detect_target="person", multi_subject=False, split_screen=False, debug=False):
         """
         核心流程入口
         ratio_str: "9:16", "4:3", "1:1", "16:9" 等字符串
@@ -105,7 +105,38 @@ class SmartReframer:
         """
         self.tracker = VideoTracker()
 
-        logger.info(f"开始处理视频: {input_path} | 比例: {ratio_str} | 模式: {mode} | 目标: {detect_target} | 分镜拆条: {multi_subject}")
+        logger.info(f"开始处理视频: {input_path} | 比例: {ratio_str} | 模式: {mode} | 目标: {detect_target} | 分镜拆条: {multi_subject} | 分屏: {split_screen}")
+
+        if debug:
+            src_w, src_h, fps, total_frames = self._get_video_info(input_path)
+            target_ids = get_ids_by_names(detect_target)
+            logger.info(f"追踪类别 ID: {target_ids}")
+
+            # 1. 第一遍全量扫描：记录所有 ID 的原始轨迹
+            # raw_tracks_history = { id: { frame_idx: (x, y) } }
+            raw_tracks_history = defaultdict(dict)
+
+            cap = cv2.VideoCapture(input_path)
+            for i in range(total_frames):
+                ret, frame = cap.read()
+                if not ret: break
+
+                detections = self.detector.detect(frame, target_ids=target_ids)
+                tracks = self.tracker.update(detections, (src_h, src_w))
+
+                # 记录这一帧出现的所有 ID 及其位置
+                for t in tracks:
+                    tid = t['id']
+                    raw_tracks_history[tid][i] = t['bbox']
+
+                if i % 100 == 0: logger.info(f"Scanning All: {i}/{total_frames}")
+            cap.release()
+
+            debug_filename = output_path.replace("reframed_", "debug_")
+            self._render_debug_video(input_path, debug_filename, raw_tracks_history, fps)
+            # 调试模式下，生成完画框视频直接返回，不进行剪辑
+            return [debug_filename]
+
         if multi_subject:
             # 多主体模式, 并且新增分屏
             return self._process_multi_mode(input_path, output_path, ratio_str, mode, detect_target, split_screen)
@@ -357,7 +388,6 @@ class SmartReframer:
                     if i in raw_tracks_history[tid]:
                         bbox = raw_tracks_history[tid][i]
                         tx, ty = self._calc_smart_center(bbox)
-                        logger.info(f"当前主体【{tid}】的追踪位置=x:{tx}, y:{ty}, 视频尺寸:{src_w}x{src_h}")
                         last_valid = (tx, ty)
                     else:
                         tx, ty = last_valid
@@ -563,3 +593,58 @@ class SmartReframer:
         cap.release()
         process.stdin.close()
         process.wait()  # 等待 FFmpeg 编码结束
+
+    def _render_debug_video(self, input_path, output_path, raw_tracks_history, fps):
+        """
+        生成调试视频：画出所有检测到的框和 ID
+        """
+        logger.info("正在生成调试视频 (Debug Visualization)...")
+        cap = cv2.VideoCapture(input_path)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        # 使用 CPU 编码器生成画框视频
+        cmd = [
+            'ffmpeg', '-y',
+            '-f', 'rawvideo', '-vcodec', 'rawvideo',
+            '-s', f'{width}x{height}',
+            '-pix_fmt', 'bgr24', '-r', str(fps),
+            '-i', '-',
+            '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '25',
+            '-pix_fmt', 'yuv420p',
+            output_path
+        ]
+
+        process = subprocess.Popen(cmd, stdin=subprocess.PIPE, bufsize=10 ** 7)
+        frame_idx = 0
+
+        # 颜色表 (用于区分不同 ID)
+        colors = np.random.randint(0, 255, (100, 3)).tolist()
+
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret: break
+
+            # 画框
+            # 遍历所有 ID，看这一帧谁在
+            for tid, history in raw_tracks_history.items():
+                if frame_idx in history:
+                    bbox = history[frame_idx]
+                    x1, y1, x2, y2 = map(int, bbox)
+                    color = colors[tid % len(colors)]
+
+                    # 画矩形
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 4)
+                    # 写 ID
+                    cv2.putText(frame, f"ID {tid}", (x1, y1 - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3)
+
+            try:
+                process.stdin.write(frame.tobytes())
+            except:
+                break
+            frame_idx += 1
+
+        cap.release()
+        process.stdin.close()
+        process.wait()
