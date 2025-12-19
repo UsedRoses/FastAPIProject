@@ -39,6 +39,7 @@ async def reframe_video(
     target: str = Form("person", description="追踪主体，如: person, cat, dog"),
     multi_subject: bool = Form(False, description="是否开启多主体拆分模式"),
     split_screen: bool = Form(False, description="是否开启分屏"),
+    debug: bool = Form(False),
 ):
     """
     智能剪辑接口
@@ -68,7 +69,8 @@ async def reframe_video(
             mode=mode,
             detect_target=target,
             multi_subject=multi_subject,
-            split_screen=split_screen
+            split_screen=split_screen,
+            debug=debug
         )
         return {
             "status": "success",
