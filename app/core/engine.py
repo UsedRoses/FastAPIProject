@@ -61,12 +61,13 @@ class SmartReframer:
     def __init__(self, model_path, device="cuda"):
         # 初始化 AI 模型
         self.detector = YOLOXDetector(model_path, model_name="yolox-x", device=device)
-        self.tracker = VideoTracker()
 
         # 平滑器将在 process_video 中根据模式初始化
         # 分别定义 X 和 Y 的平滑器
         self.smoother_x = None
         self.smoother_y = None
+
+        self.tracker = None
 
     def _get_video_info(self, video_path):
         cap = cv2.VideoCapture(video_path)
@@ -102,6 +103,8 @@ class SmartReframer:
 
         根据 multi_subject 决定走单人模式还是多人模式
         """
+        self.tracker = VideoTracker()
+
         logger.info(f"开始处理视频: {input_path} | 比例: {ratio_str} | 模式: {mode} | 目标: {detect_target} | 分镜拆条: {multi_subject}")
         if multi_subject:
             # 多主体模式, 并且新增分屏
@@ -256,10 +259,12 @@ class SmartReframer:
 
             # 找到 id_bottom 第一次出现的坐标
             start_pos_bottom = self._get_first_position(id_bottom, raw_tracks_history, src_w, src_h)
+            logger.info(f"Bottom主体第一次出现的坐标: {start_pos_bottom}")
 
             # 找到 id_top 第一次出现的坐标 (如果不存在则用计算逻辑)
             if id_top:
                 start_pos_top = self._get_first_position(id_top, raw_tracks_history, src_w, src_h)
+                logger.info(f"Top主体第一次出现的坐标: {start_pos_top}")
             else:
                 # 单人模式背景逻辑：如果主体在左，背景初始在右
                 if start_pos_bottom[0] < src_w / 2:
@@ -268,7 +273,7 @@ class SmartReframer:
                     start_pos_top = (src_w * 0.25, src_h / 2)
 
             # --- 使用正确位置初始化滤波器 ---
-            preset = SMOOTHING_PRESETS.get(mode, SMOOTHING_PRESETS["normal"])
+            preset = SMOOTHING_PRESETS.get(mode, SMOOTHING_PRESETS["stable"])
 
             # Bottom Filter
             self.smoother_x = OneEuroFilter(t0=0, x0=start_pos_bottom[0], min_cutoff=preset["min_cutoff"],
@@ -339,14 +344,24 @@ class SmartReframer:
                 # 为每个 ID 初始化独立的滤波器
                 self._init_smoothers(src_w, src_h, mode)
 
+                # 获取该 ID 的初始位置 (防止从画面中心飘过去)
+                start_pos = self._get_first_position(tid, raw_tracks_history, src_w, src_h)
+
                 # 生成该 ID 的专属路径
                 id_path = []
+
+                # 初始化记忆位置
+                last_valid = start_pos
+
                 for i in range(total_frames):
                     if i in raw_tracks_history[tid]:
                         bbox = raw_tracks_history[tid][i]
+                        if tid == 2:
+                            logger.info(f"当前主体【{tid}】的bbox={bbox}")
                         tx, ty = self._calc_smart_center(bbox)
+                        last_valid = (tx, ty)
                     else:
-                        tx, ty = src_w / 2, src_h / 2
+                        tx, ty = last_valid
 
                     # 滤波
                     sx = self.smoother_x(i / fps, tx)
