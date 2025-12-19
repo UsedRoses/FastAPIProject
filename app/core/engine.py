@@ -3,6 +3,7 @@
 import cv2
 import subprocess
 import os
+import numpy as np
 from loguru import logger
 from collections import defaultdict
 from app.core.detector import YOLOXDetector
