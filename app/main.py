@@ -37,7 +37,8 @@ async def reframe_video(
     ratio: str = Form("9:16", description="裁剪比例，如 9:16, 4:3, 1:1"),
     mode: str = Form("normal", description="运镜模式: fast(运动), normal(标准), stable(访谈)"),
     target: str = Form("person", description="追踪主体，如: person, cat, dog"),
-    multi_subject: bool = Form(False, description="是否开启多主体拆分模式")
+    multi_subject: bool = Form(False, description="是否开启多主体拆分模式"),
+    split_screen: bool = Form(False, description="是否开启分屏"),
 ):
     """
     智能剪辑接口
@@ -66,7 +67,8 @@ async def reframe_video(
             ratio_str=ratio,
             mode=mode,
             detect_target=target,
-            multi_subject=multi_subject
+            multi_subject=multi_subject,
+            split_screen=split_screen
         )
         return {
             "status": "success",

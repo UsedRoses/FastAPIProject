@@ -80,27 +80,21 @@ class SmartReframer:
         cap.release()
         return width, height, fps, total_frames
 
-    def _select_main_subject(self, tracks, locked_id):
-        """
-        主角选择逻辑：
-        1. 如果有锁定的 ID 且该 ID 还在画面内，继续选它。
-        2. 如果锁定 ID 丢失，选择画面中面积最大的人作为新主角。
-        """
-        if not tracks:
-            return None, locked_id
+    # --- 智能重心计算 (解决站立/坐着的问题) ---
+    def _calc_smart_center(self, bbox):
+        x1, y1, x2, y2 = bbox
+        w = x2 - x1
+        h = y2 - y1
+        center_x = x1 + w / 2
 
-        # 优先锁定之前的主角
-        if locked_id is not None:
-            for t in tracks:
-                if t['id'] == locked_id:
-                    return t, locked_id
+        # 智能垂直重心 (Head Bias):
+        # 不瞄准 bbox 的几何中心 (0.5)，而是瞄准上部 35% 处 (0.35)
+        # 这样无论是站着还是坐着，镜头都会偏向头部和胸部，而不是肚子
+        smart_center_y = y1 + (h * 0.35)
 
-        # 如果没找到，或者还没锁定，找面积最大的
-        # t['bbox'] = [x, y, w, h]
-        best_track = max(tracks, key=lambda t: t['bbox'][2] * t['bbox'][3])
-        return best_track, best_track['id']
+        return center_x, smart_center_y
 
-    def process_video(self, input_path, output_path, ratio_str="9:16", mode="normal", detect_target="person", multi_subject=False):
+    def process_video(self, input_path, output_path, ratio_str="9:16", mode="normal", detect_target="person", multi_subject=False, split_screen=False):
         """
         核心流程入口
         ratio_str: "9:16", "4:3", "1:1", "16:9" 等字符串
@@ -110,9 +104,10 @@ class SmartReframer:
         """
         logger.info(f"开始处理视频: {input_path} | 比例: {ratio_str} | 模式: {mode} | 目标: {detect_target} | 分镜拆条: {multi_subject}")
         if multi_subject:
-            return self._process_multi_mode(input_path, output_path, ratio_str, mode, detect_target)
+            # 多主体模式, 并且新增分屏
+            return self._process_multi_mode(input_path, output_path, ratio_str, mode, detect_target, split_screen)
         else:
-            # 兼容旧的单回传值，为了统一接口，单路径也包在列表里
+            # 单主体模式, 为了统一接口, 单路径也包在列表里
             path = self._process_single_mode(input_path, output_path, ratio_str, mode, detect_target)
             return [path]
 
@@ -150,16 +145,19 @@ class SmartReframer:
             tracks = self.tracker.update(detections, (src_h, src_w))
 
             # 3. 锁定主角
-            subject, locked_id = self._select_main_subject(tracks, locked_id)
+            subject = None
+            if locked_id is not None:
+                for t in tracks:
+                    if t['id'] == locked_id: subject = t; break
+            if not subject and tracks:
+                subject = max(tracks, key=lambda t: t['bbox'][2] * t['bbox'][3])
+                locked_id = subject['id']
 
-            # 4. 计算目标中心点
             if subject:
-                # 获取 x 和 y
-                tx, ty = subject['center']
+                # 使用智能重心
+                tx, ty = self._calc_smart_center(subject['bbox'])
             else:
-                # 没人？缓慢回归到画面正中心
                 tx, ty = src_w / 2, src_h / 2
-
 
             # timestamp 使用帧号/FPS
             timestamp = i / fps
@@ -186,7 +184,7 @@ class SmartReframer:
         return output_path
 
     # ==================== 模式 B: 新增的多人拆分逻辑 ====================
-    def _process_multi_mode(self, input_path, output_path, ratio_str, mode, detect_target):
+    def _process_multi_mode(self, input_path, output_path, ratio_str, mode, detect_target, split_screen):
         logger.info(f"=== 多主体拆分模式: {input_path} ===")
         src_w, src_h, fps, total_frames = self._get_video_info(input_path)
         target_w, target_h = self._calc_target_size(src_w, src_h, ratio_str)
@@ -208,14 +206,14 @@ class SmartReframer:
             # 记录这一帧出现的所有 ID 及其位置
             for t in tracks:
                 tid = t['id']
-                raw_tracks_history[tid][i] = t['center']
+                raw_tracks_history[tid][i] = t['bbox']
 
             if i % 100 == 0: logger.info(f"Scanning All: {i}/{total_frames}")
         cap.release()
 
-        # 2. 筛选有效 ID (例如：出现时长超过视频总长的 20%)
+        # 2. 筛选有效 ID (例如：出现时长超过视频总长的 15%)
         # 访谈类节目，主角通常会一直存在
-        min_duration = total_frames * 0.2
+        min_duration = total_frames * 0.15
         valid_ids = []
         for tid, history in raw_tracks_history.items():
             if len(history) > min_duration:
@@ -228,45 +226,115 @@ class SmartReframer:
 
         logger.info(f"检测到 {len(valid_ids)} 个常驻主体: {valid_ids}")
 
-        generated_files = []
+        # --- 分屏模式开启 (Split Screen) ---
+        if split_screen:
+            logger.info(f"生成智能分屏视频 (Top 2 Subjects)")
 
-        # 3. 逐个 ID 生成视频
-        for idx, tid in enumerate(valid_ids):
-            logger.info(f"正在处理第 {idx + 1}/{len(valid_ids)} 个主体 (ID: {tid})")
+            # 选出 Top 2 (按出现时长排序)
+            sorted_ids = sorted(valid_ids, key=lambda x: len(raw_tracks_history[x]), reverse=True)
 
-            # 为每个 ID 初始化独立的滤波器
-            self._init_smoothers(src_w, src_h, mode)
+            # 下半屏(主视角): ID 1
+            id_bottom = sorted_ids[0]
+            # 上半屏(副视角): ID 2 (如果没有第二个ID，就用固定画面或ID 1)
+            id_top = sorted_ids[1] if len(sorted_ids) > 1 else None
 
-            # 生成该 ID 的专属路径
-            id_camera_path = []
-            history = raw_tracks_history[tid]
+            # 初始化两套滤波器
+            self._init_smoothers(src_w, src_h, mode)  # Bottom 用
+            smoother_top_x = OneEuroFilter(t0=0, x0=src_w / 2, min_cutoff=0.05, beta=0.005)  # Top 用
+            smoother_top_y = OneEuroFilter(t0=0, x0=src_h / 2, min_cutoff=0.05, beta=0.005)
 
-            # 补帧逻辑：如果某几帧 ID 丢失（遮挡/转头），保持上一帧的位置
-            last_x, last_y = src_w / 2, src_h / 2
+            path_bottom = []
+            path_top = []
+
+            # === 智能比例分配 ===
+            if id_top is not None:
+                # 场景：两人对谈 -> 50% : 50%
+                split_ratio = 0.5
+                logger.info("检测到双主体，使用 50/50 分屏")
+            else:
+                # 场景：单人 + 背景/PPT -> 65% : 35% (人更大)
+                split_ratio = 0.65
+                logger.info("检测到单主体，使用 65/35 分屏 (主体优先)")
+
+            # 计算具体高度
+            h_bottom = int(target_h * split_ratio)
+            h_top = target_h - h_bottom
+
+            # 记录上一次的有效位置 (补偿逻辑主体丢失的问题)
+            last_valid_bottom = (src_w / 2, src_h / 2)
+            last_valid_top = (src_w / 2, src_h / 2)
 
             for i in range(total_frames):
-                if i in history:
-                    tx, ty = history[i]
-                    last_x, last_y = tx, ty
+                ts = i / fps
+
+                # --- 计算下半屏 (Main) ---
+                if i in raw_tracks_history[id_bottom]:
+                    bbox = raw_tracks_history[id_bottom][i]
+                    tx, ty = self._calc_smart_center(bbox)
+                    last_valid_bottom = (tx, ty)  # 更新记忆
                 else:
-                    # 丢失时使用上一次已知位置 (或者可以让它缓慢回中，这里选保持不动更适合访谈)
-                    tx, ty = last_x, last_y
+                    # 丢失时，使用最后一次已知位置 (Hold)，而不是回中
+                    tx, ty = last_valid_bottom
 
-                # 滤波
-                sx = self.smoother_x(i / fps, tx)
-                sy = self.smoother_y(i / fps, ty)
+                sx = self.smoother_x(ts, tx)
+                sy = self.smoother_y(ts, ty)
+                # 注意：计算 crop 时用 h_bottom
+                path_bottom.append(self._calc_crop_xy(sx, sy, target_w, h_bottom, src_w, src_h))
 
-                id_camera_path.append(self._calc_crop_xy(sx, sy, target_w, target_h, src_w, src_h))
+                # --- 计算上半屏 (Secondary) ---
+                if id_top and i in raw_tracks_history[id_top]:
+                    bbox = raw_tracks_history[id_top][i]
+                    tx2, ty2 = self._calc_smart_center(bbox)
+                    last_valid_top = (tx2, ty2)
+                elif id_top is None:
+                    # 单人模式：Top 显示背景，取离 Bottom 最远的一侧
+                    # 简单策略：如果 Bottom 在左，Top 取右；反之亦然
+                    # 这里用平滑后的 sx 来判断当前主体位置
+                    if sx < src_w / 2:
+                        tx2 = src_w * 0.75  # 主体在左，背景取右侧 3/4 处
+                    else:
+                        tx2 = src_w * 0.25  # 主体在右，背景取左侧 1/4 处
+                    ty2 = src_h / 2
+                else:
+                    # 双人模式下 ID 2 丢失：保持最后位置
+                    tx2, ty2 = last_valid_top
 
-            # 构造输出文件名: reframed_multi_1.mp4
-            base, ext = os.path.splitext(output_path)
-            sub_output_path = f"{base}_subject_{tid}{ext}"
+                sx2 = smoother_top_x(ts, tx2)
+                sy2 = smoother_top_y(ts, ty2)
+                path_top.append(self._calc_crop_xy(sx2, sy2, target_w, h_top, src_w, src_h))
 
-            # 渲染
-            self._render_with_ffmpeg(input_path, sub_output_path, id_camera_path, target_w, target_h, fps)
-            generated_files.append(sub_output_path)
+            # 渲染分屏
+            self._render_split_screen_cv2(input_path, output_path, path_top, path_bottom, target_w, target_h, fps)
+            return [output_path]
+        else:
+            # --- 不开分屏模式 ---
+            logger.info(f"分别导出 {len(valid_ids)} 个视频")
+            generated = []
+            for idx, tid in enumerate(valid_ids):
+                logger.info(f"正在处理第 {idx + 1}/{len(valid_ids)} 个主体 (ID: {tid})")
 
-        return generated_files
+                # 为每个 ID 初始化独立的滤波器
+                self._init_smoothers(src_w, src_h, mode)
+
+                # 生成该 ID 的专属路径
+                id_path = []
+                for i in range(total_frames):
+                    if i in raw_tracks_history[tid]:
+                        bbox = raw_tracks_history[tid][i]
+                        tx, ty = self._calc_smart_center(bbox)
+                    else:
+                        tx, ty = src_w / 2, src_h / 2
+
+                    # 滤波
+                    sx = self.smoother_x(i / fps, tx)
+                    sy = self.smoother_y(i / fps, ty)
+                    id_path.append(self._calc_crop_xy(sx, sy, target_w, target_h, src_w, src_h))
+
+                base, ext = os.path.splitext(output_path)
+                sub_out = f"{base}_subject_{tid}{ext}"
+                self._render_with_ffmpeg(input_path, sub_out, id_path, target_w, target_h, fps)
+                generated.append(sub_out)
+            return generated
 
     def _calc_target_size(self, src_w, src_h, ratio_str):
         # --- 1. 智能尺寸计算 ---
@@ -308,6 +376,68 @@ class SmartReframer:
         crop_y = sy - (th / 2)
         crop_y = max(0, min(crop_y, sh - th))
         return (int(crop_x), int(crop_y))
+
+    # --- OpenCV 拼接渲染器 (解决 FFmpeg 复杂指令问题) ---
+    def _render_split_screen_cv2(self, input_path, output_path, path_top, path_bottom, w, h, h_top, h_bottom, fps):
+        # 使用稳定的 CPU 编码
+        video_encoder = 'libx264'
+
+        cmd = [
+            'ffmpeg', '-y',
+            '-f', 'rawvideo', '-vcodec', 'rawvideo',
+            '-s', f'{w}x{h}',  # 总尺寸
+            '-pix_fmt', 'bgr24', '-r', str(fps),
+            '-i', '-',
+            '-i', input_path,
+            '-map', '0:v', '-map', '1:a?',
+            '-c:v', video_encoder, '-preset', 'veryfast', '-crf', '23',
+            '-vf', 'format=yuv420p',
+            '-c:a', 'aac', '-b:a', '192k', '-shortest',
+            output_path
+        ]
+
+        process = subprocess.Popen(cmd, stdin=subprocess.PIPE, bufsize=10 ** 7)
+        cap = cv2.VideoCapture(input_path)
+        frame_idx = 0
+
+        # 创建分割线颜色 (白色)
+        separator_color = (255, 255, 255)
+        separator_thickness = 2
+
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret: break
+            if frame_idx >= len(path_top): break
+
+            # 1. 裁剪 Bottom (高度 h_bottom)
+            bx, by = path_bottom[frame_idx]
+            img_bottom = self._safe_crop(frame, bx, by, w, h_bottom)
+
+            # 2. 裁剪 Top (高度 h_top)
+            tx, ty = path_top[frame_idx]
+            img_top = self._safe_crop(frame, tx, ty, w, h_top)
+
+            # 3. 拼接
+            try:
+                # 可选：在 img_top 底部画一条线，或者直接拼
+                final_frame = cv2.vconcat([img_top, img_bottom])
+                process.stdin.write(final_frame.tobytes())
+            except Exception as e:
+                logger.error(f"Stitch error: {e}")
+                break
+
+            frame_idx += 1
+
+        cap.release()
+        process.stdin.close()
+        process.wait()
+
+    def _safe_crop(self, frame, x, y, w, h):
+        """防止裁剪越界的 helper"""
+        max_h, max_w = frame.shape[:2]
+        x = max(0, min(x, max_w - w))
+        y = max(0, min(y, max_h - h))
+        return frame[y:y + h, x:x + w]
 
     def _render_with_ffmpeg(self, input_path, output_path, camera_path, w, h, fps):
         """
