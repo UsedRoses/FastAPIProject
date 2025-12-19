@@ -356,9 +356,8 @@ class SmartReframer:
                 for i in range(total_frames):
                     if i in raw_tracks_history[tid]:
                         bbox = raw_tracks_history[tid][i]
-                        if tid == 2:
-                            logger.info(f"当前主体【{tid}】的bbox={bbox}")
                         tx, ty = self._calc_smart_center(bbox)
+                        logger.info(f"当前主体【{tid}】的追踪位置=x:{tx}, y:{ty}, 视频尺寸:{src_w}x{src_h}")
                         last_valid = (tx, ty)
                     else:
                         tx, ty = last_valid
