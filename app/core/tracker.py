@@ -17,28 +17,25 @@ class VideoTracker:
         self.tracker = BYTETracker(args, frame_rate=fps)
 
     def update(self, detections, img_size):
-        """
-        detections: np.array [[x1, y1, x2, y2, score], ...]
-        img_size: (height, width)
-        """
-        # ByteTracker 需要的输入格式是 Tensor 或者特定的 numpy 结构
-        # 这里直接传 numpy 即可，YOLOX 的实现里处理了
         if detections is None or len(detections) == 0:
             return []
 
-        # update 返回的是 STrack 对象列表
         online_targets = self.tracker.update(detections, img_size, (img_size[0], img_size[1]))
 
         results = []
         for t in online_targets:
-            tlwh = t.tlwh  # top-left width height
-            tid = t.track_id
-            # 转换成中心点，方便后续计算
-            center_x = tlwh[0] + tlwh[2] / 2
-            center_y = tlwh[1] + tlwh[3] / 2
+            # --- 核心修改：使用 .tlbr 而不是 .tlwh ---
+            # tlbr = [x1, y1, x2, y2] (Top-Left, Bottom-Right)
+            # 这样所有的后续逻辑都不用动了
+            tlbr = t.tlbr
+
+            # center 计算依然没问题
+            center_x = (tlbr[0] + tlbr[2]) / 2
+            center_y = (tlbr[1] + tlbr[3]) / 2
+
             results.append({
-                "id": tid,
-                "bbox": tlwh,
+                "id": t.track_id,
+                "bbox": tlbr,  # <--- 修正为 tlbr
                 "center": (center_x, center_y),
                 "score": t.score
             })
