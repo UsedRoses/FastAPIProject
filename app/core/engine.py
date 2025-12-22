@@ -19,6 +19,13 @@ SMOOTHING_PRESETS = {
     "stable": {"min_cutoff": 0.005, "beta": 0.0005}  # 【访谈模式】讲座、新闻：如定海神针，几乎不动，除非大幅移动
 }
 
+# 死区阈值
+DEAD_ZOOM_PRESETS = {
+    "fast": 10,
+    "normal": 40,
+    "stable": 80,
+}
+
 # COCO 数据集 80 类名称映射表
 COCO_CLASSES = (
     "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat", "traffic light",
@@ -63,11 +70,6 @@ class SmartReframer:
         # 初始化 AI 模型
         self.detector = YOLOXDetector(model_path, model_name="yolox-x", device=device)
 
-        # 平滑器将在 process_video 中根据模式初始化
-        # 分别定义 X 和 Y 的平滑器
-        self.smoother_x = None
-        self.smoother_y = None
-
         self.tracker = None
 
     def _get_video_info(self, video_path):
@@ -89,14 +91,107 @@ class SmartReframer:
         h = y2 - y1
         center_x = x1 + w / 2
 
-        # 智能垂直重心 (Head Bias):
-        # 不瞄准 bbox 的几何中心 (0.5)，而是瞄准上部 35% 处 (0.35)
-        # 这样无论是站着还是坐着，镜头都会偏向头部和胸部，而不是肚子
-        smart_center_y = y1 + (h * 0.35)
+        # --- 根据形态决定重心 ---
+        aspect_ratio = w / h
+
+        if aspect_ratio < 0.8:
+            # 瘦高型 (站立的人): 重心上移 (瞄准胸部/头部)
+            # 0.35 表示从顶部落下 35% 的距离
+            smart_center_y = y1 + (h * 0.35)
+        elif aspect_ratio > 1.2:
+            # 扁平型 (趴着的猫、车): 重心居中，甚至稍微偏下以展示地面
+            # 0.5 表示几何中心
+            smart_center_y = y1 + (h * 0.5)
+        else:
+            # 方形 (坐着的人/大头照): 稍微上移一点点
+            smart_center_y = y1 + (h * 0.45)
 
         return center_x, smart_center_y
 
-    def process_video(self, input_path, output_path, ratio_str="9:16", mode="normal", detect_target="person", multi_subject=False, split_screen=False, debug=False):
+    def _calc_auto_zoom(self, bbox, target_w, target_h, src_w, src_h):
+        """计算为了包住主体所需的 Zoom Out 系数"""
+        x1, y1, x2, y2 = bbox
+        subj_w = x2 - x1
+
+        # 留白 15%
+        padding = 1.15
+        needed_w = subj_w * padding
+
+        # 如果主体宽度 > 目标宽度，需要 Zoom > 1.0 (缩小画面)
+        # 否则 Zoom = 1.0 (保持原画质，不进行数码变焦放大，防止模糊)
+        zoom = needed_w / target_w
+
+        # 限制：最大不能超过原视频宽度
+        max_zoom = src_w / target_w
+        return max(1.0, min(zoom, max_zoom))
+
+    # --- 智能布局计算引擎 ---
+    def _get_smart_layout(self, num_subjects, target_w, target_h):
+        """
+        根据主体数量，返回每个主体在画布上的 (x, y, w, h)
+        返回格式: [(x, y, w, h), (x, y, w, h), ...]
+        列表索引 0 对应最主要的主体 (ID出现时间最长的)
+        """
+        layout_slots = []
+
+        if num_subjects == 1:
+            # 全屏
+            layout_slots.append((0, 0, target_w, target_h))
+
+        elif num_subjects == 2:
+            # 上下平分
+            h_half = target_h // 2
+            layout_slots.append((0, h_half, target_w, target_h - h_half))  # 主体1放下面(通常是主视角)
+            layout_slots.append((0, 0, target_w, h_half))  # 主体2放上面
+
+        elif num_subjects == 3:
+            # 品字形布局 (上面1个大的，下面2个小的)
+            # 这种布局适合竖屏，如果是横屏输出，可能需要左右结构
+            # 假设输出是 9:16
+
+            # Top: 上半部分，高度 50%
+            h_top = target_h // 2
+            h_bottom = target_h - h_top
+
+            # Top Slot (大图): 放 ID 1
+            layout_slots.append((0, 0, target_w, h_top))
+
+            # Bottom Slots (小图): 左右平分
+            w_half = target_w // 2
+            layout_slots.append((0, h_top, w_half, h_bottom))  # 左下
+            layout_slots.append((w_half, h_top, target_w - w_half, h_bottom))  # 右下
+
+        elif num_subjects == 4:
+            # 田字格 (2x2)
+            w_half = target_w // 2
+            h_half = target_h // 2
+
+            layout_slots.append((0, 0, w_half, h_half))  # 左上
+            layout_slots.append((w_half, 0, w_half, h_half))  # 右上
+            layout_slots.append((0, h_half, w_half, h_half))  # 左下
+            layout_slots.append((w_half, h_half, w_half, h_half))  # 右下
+
+        else:
+            # > 4 的情况，简单暴力处理：全部做成横条 (或者你可以扩展 3x2)
+            h_per = target_h // num_subjects
+            for i in range(num_subjects):
+                y = i * h_per
+                h = h_per if i < num_subjects - 1 else (target_h - y)
+                layout_slots.append((0, y, target_w, h))
+
+        return layout_slots
+
+    def process_video(self,
+                      input_path,
+                      output_path,
+                      ratio_str="9:16",
+                      mode="normal",
+                      detect_target="person",
+                      multi_subject=False,
+                      split_screen=False,
+                      max_split=3,
+                      debug=False
+                      ):
         """
         核心流程入口
         ratio_str: "9:16", "4:3", "1:1", "16:9" 等字符串
@@ -109,42 +204,302 @@ class SmartReframer:
         logger.info(f"开始处理视频: {input_path} | 比例: {ratio_str} | 模式: {mode} | 目标: {detect_target} | 分镜拆条: {multi_subject} | 分屏: {split_screen}")
 
         if debug:
-            src_w, src_h, fps, total_frames = self._get_video_info(input_path)
-            target_ids = get_ids_by_names(detect_target)
-            logger.info(f"追踪类别 ID: {target_ids}")
+            return self.run_debug(input_path, output_path, detect_target)
 
-            # 1. 第一遍全量扫描：记录所有 ID 的原始轨迹
-            # raw_tracks_history = { id: { frame_idx: (x, y) } }
-            raw_tracks_history = defaultdict(dict)
+        src_w, src_h, fps, total_frames = self._get_video_info(input_path)
+        target_w, target_h = self._calc_target_size(src_w, src_h, ratio_str)
+        target_ids = get_ids_by_names(detect_target)
 
-            cap = cv2.VideoCapture(input_path)
-            for i in range(total_frames):
-                ret, frame = cap.read()
-                if not ret: break
+        # 全量扫描 (Scan Phase)
+        raw_tracks_history = defaultdict(dict)
+        cap = cv2.VideoCapture(input_path)
+        for i in range(total_frames):
+            ret, frame = cap.read()
+            if not ret: break
+            detections = self.detector.detect(frame, target_ids=target_ids)
+            tracks = self.tracker.update(detections, (src_h, src_w))
+            for t in tracks:
+                # 记录 bbox [x1, y1, x2, y2]
+                raw_tracks_history[t['id']][i] = t['bbox']
+            if i % 500 == 0: logger.info(f"Scanning: {i}/{total_frames}")
+        cap.release()
 
-                detections = self.detector.detect(frame, target_ids=target_ids)
-                tracks = self.tracker.update(detections, (src_h, src_w))
+        # 筛选有效主体 (Filter Phase)
+        # 只要出现超过 1.5秒 (45帧) 就算有效，防止漏掉
+        absolute_min_frames = 45
+        sorted_candidates = sorted(
+            [(tid, len(h)) for tid, h in raw_tracks_history.items() if len(h) > absolute_min_frames],
+            key=lambda x: x[1],
+            reverse=True
+        )
+        valid_ids = [x[0] for x in sorted_candidates]
+        logger.info(f"检测到的主体(ID/帧数): {sorted_candidates}")
 
-                # 记录这一帧出现的所有 ID 及其位置
-                for t in tracks:
-                    tid = t['id']
-                    raw_tracks_history[tid][i] = t['bbox']
+        # 如果没找到任何主体，这就变成了一个纯风景视频，我们可以虚拟一个 ID=None 的任务
+        if not valid_ids:
+            logger.warning("无有效主体，进入默认背景模式")
+            valid_ids = [None]
 
-                if i % 100 == 0: logger.info(f"Scanning All: {i}/{total_frames}")
-            cap.release()
+        # 路径生成与渲染 (Path Generation & Render)
 
-            debug_filename = output_path.replace("reframed_", "debug_")
-            self._render_debug_video(input_path, debug_filename, raw_tracks_history, fps)
-            # 调试模式下，生成完画框视频直接返回，不进行剪辑
-            return [debug_filename]
+        # === A. 分屏合并模式 (Split Screen) ===
+        if split_screen and multi_subject:
+            # 截取前 N 个
+            selected_ids = valid_ids[:max_split]
+            num_subjects = len(selected_ids)
+            logger.info(f"应用 {num_subjects} 分屏布局")
 
-        if multi_subject:
-            # 多主体模式, 并且新增分屏
-            return self._process_multi_mode(input_path, output_path, ratio_str, mode, detect_target, split_screen)
+            # --- 获取布局配置 ---
+            # slots: [(x, y, w, h), ...] 对应 selected_ids 的顺序
+            layout_slots = self._get_smart_layout(num_subjects, target_w, target_h)
+
+            # 并行生成所有路径
+            all_paths = []
+            for i, tid in enumerate(selected_ids):
+                # 获取该 ID 在布局中被分配的宽高
+                slot_x, slot_y, slot_w, slot_h = layout_slots[i]
+
+                # 生成路径 (注意：传入的是格子的尺寸，自动变焦会根据格子大小调整)
+                path = self._generate_track_path(
+                    tid, raw_tracks_history, total_frames, fps,
+                    src_w, src_h, slot_w, slot_h, mode
+                )
+                all_paths.append(path)
+
+            # 渲染网格
+            self._render_grid_cv2(
+                input_path, output_path, all_paths, layout_slots, target_w, target_h, fps
+            )
+            return [output_path]
+
+        # === B. 独立导出模式 (Single / Multi Separate) ===
         else:
-            # 单主体模式, 为了统一接口, 单路径也包在列表里
-            path = self._process_single_mode(input_path, output_path, ratio_str, mode, detect_target)
-            return [path]
+            # 如果不是多主体模式，只取第一个 ID
+            export_ids = valid_ids if multi_subject else [valid_ids[0]]
+
+            logger.info(f"独立导出模式，将生成 {len(export_ids)} 个视频")
+            generated = []
+
+            for tid in export_ids:
+                # 生成路径
+                path = self._generate_track_path(tid, raw_tracks_history, total_frames, fps, src_w, src_h, target_w, target_h, mode)
+
+                # 构造文件名
+                sub_out = output_path
+                if len(export_ids) > 1 and tid is not None:
+                    base, ext = os.path.splitext(output_path)
+                    sub_out = f"{base}_subject_{tid}{ext}"
+
+                # 渲染 (单屏其实就是 1 层的堆叠)
+                layout_slots = [(0, 0, target_w, target_h)]
+                self._render_grid_cv2(input_path, sub_out, [path], layout_slots, target_w, target_h, fps)
+                generated.append(sub_out)
+
+            return generated
+
+    # ==================== 核心逻辑 通用路径生成器 ====================
+    def _generate_track_path(self, tid, raw_tracks_history, total_frames, fps, src_w, src_h, target_w, target_h,
+                             mode):
+        """
+        为指定 ID 生成一条 (x, y, zoom) 的完整路径。
+        包含了：智能重心、Hold丢失补偿、自动变焦、OneEuro滤波。
+        """
+        # 1. 确定初始位置
+        history = raw_tracks_history.get(tid, {}) if tid is not None else {}
+
+        if history:
+            # 找到第一帧
+            first_frame = sorted(history.keys())[0]
+            start_bbox = history[first_frame]
+            start_cx, start_cy = self._calc_smart_center(start_bbox)
+            start_zoom = self._calc_auto_zoom(start_bbox, target_w, target_h, src_w, src_h)
+        else:
+            # 如果没有历史 (ID=None 或 空)，居中
+            start_cx, start_cy = src_w / 2, src_h / 2
+            start_zoom = 1.0
+
+        # 2. 初始化独立滤波器
+        preset = SMOOTHING_PRESETS.get(mode, SMOOTHING_PRESETS["normal"])
+        smoother_x = OneEuroFilter(t0=0, x0=start_cx, min_cutoff=preset["min_cutoff"], beta=preset["beta"])
+        smoother_y = OneEuroFilter(t0=0, x0=start_cy, min_cutoff=preset["min_cutoff"], beta=preset["beta"])
+        # Zoom 变化要慢一点，防止晕车
+        smoother_z = OneEuroFilter(t0=0, x0=start_zoom, min_cutoff=0.01, beta=0.005)
+
+        path = []
+        # --- 状态变量 ---
+        # 用于处理丢失情况
+        last_valid_pos = (start_cx, start_cy)
+        last_valid_zoom = start_zoom
+
+        # --- 新增：用于死区逻辑的状态变量 ---
+        # 记录上一次“真正移动了镜头”时的目标位置
+        last_fed_x = start_cx
+        last_fed_y = start_cy
+
+        # 死区阈值 N
+        # 意思：如果检测到的中心点变化小于 50 像素，就当它没动
+        # 对于访谈类 (stable)，建议设大一点 (如 50-80)
+        # 对于运动类 (fast)，建议设小一点 (如 10-20)
+        dead_zone_n = DEAD_ZOOM_PRESETS.get(mode, DEAD_ZOOM_PRESETS["normal"])
+
+        for i in range(total_frames):
+            ts = i / fps
+
+            if i in history:
+                bbox = history[i]
+                tx, ty = self._calc_smart_center(bbox)
+                tz = self._calc_auto_zoom(bbox, target_w, target_h, src_w, src_h)
+
+                last_valid_pos = (tx, ty)
+                last_valid_zoom = tz
+            else:
+                # 丢失时，保持最后状态 (Hold)
+                tx, ty = last_valid_pos
+                tz = last_valid_zoom
+
+            # 只有当新位置 (tx) 和上一次锁定的位置 (last_fed_x) 差距超过 N 时，才更新目标
+            # 否则，强行把目标按住在原地
+
+            # X轴判断
+            if abs(tx - last_fed_x) < dead_zone_n:
+                tx = last_fed_x  # 没超过阈值，欺骗滤波器说“我没动”
+            else:
+                last_fed_x = tx  # 超过了，更新锁定位置
+
+            # Y轴判断
+            if abs(ty - last_fed_y) < dead_zone_n:
+                ty = last_fed_y
+            else:
+                last_fed_y = ty
+
+            # 3D 滤波
+            sx = smoother_x(ts, tx)
+            sy = smoother_y(ts, ty)
+            sz = smoother_z(ts, tz)
+
+            path.append((int(sx), int(sy), sz))
+
+        return path
+
+    # --- 通用网格渲染器 (支持任意排版) ---
+    def _render_grid_cv2(self, input_path, output_path, paths_list, layout_slots, final_w, final_h, fps):
+        """
+        paths_list: [path_subj_1, path_subj_2, ...]
+        layout_slots: [(x,y,w,h), (x,y,w,h), ...] 对应每个主体在画布的位置
+        """
+        video_encoder = 'libx264'
+        cmd = [
+            'ffmpeg', '-y',
+            '-f', 'rawvideo', '-vcodec', 'rawvideo',
+            '-s', f'{final_w}x{final_h}',
+            '-pix_fmt', 'bgr24', '-r', str(fps),
+            '-i', '-', '-i', input_path,
+            '-map', '0:v', '-map', '1:a?',
+            '-c:v', video_encoder, '-preset', 'veryfast', '-crf', '23',
+            '-vf', 'format=yuv420p',
+            '-c:a', 'aac', '-b:a', '192k', '-shortest',
+            output_path
+        ]
+
+        process = subprocess.Popen(cmd, stdin=subprocess.PIPE, bufsize=10 ** 7)
+        cap = cv2.VideoCapture(input_path)
+        frame_idx = 0
+
+        # 预创建一个黑色画布 (避免每帧都 create，提升性能)
+        # 注意：这里不能预创建，因为每帧都要清空或者覆盖。但我们可以创建一个 base_canvas。
+
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret: break
+            if frame_idx >= len(paths_list[0]): break
+
+            # 创建黑色背景画布
+            final_canvas = np.zeros((final_h, final_w, 3), dtype=np.uint8)
+
+            # 遍历每个主体，贴到对应的 slot 里
+            for i, path in enumerate(paths_list):
+                # 获取该主体的目标格子信息
+                slot_x, slot_y, slot_w, slot_h = layout_slots[i]
+
+                # 获取追踪参数
+                cx, cy, zoom = path[frame_idx]
+
+                # --- 核心裁剪逻辑 (复用之前 Zoom + Letterbox) ---
+                real_w = int(slot_w * zoom)
+                real_h = int(slot_h * zoom)
+
+                crop_x = int(cx - real_w / 2)
+                crop_y = int(cy - real_h / 2)
+
+                raw_crop = self._safe_crop(frame, crop_x, crop_y, real_w, real_h)
+
+                # Resize 到格子大小
+                # 保持宽度撑满格子 (slot_w)，高度自适应
+                scale = slot_w / real_w
+                resized_h = int(raw_crop.shape[0] * scale)
+                img_resized = cv2.resize(raw_crop, (slot_w, resized_h), interpolation=cv2.INTER_LINEAR)
+
+                # Letterbox 处理 (如果 resize 后高度 < slot_h，居中补黑；如果 > slot_h，裁中间)
+                y_offset = (slot_h - resized_h) // 2
+
+                if y_offset >= 0:
+                    # 放入格子中心
+                    final_canvas[slot_y + y_offset: slot_y + y_offset + resized_h,
+                    slot_x: slot_x + slot_w] = img_resized
+                else:
+                    # 裁剪图片中心
+                    y_start = -y_offset
+                    final_canvas[slot_y: slot_y + slot_h, slot_x: slot_x + slot_w] = \
+                        img_resized[y_start: y_start + slot_h, :]
+
+                # 可选：绘制分割线 (比如在格子边缘画白线)
+                # cv2.rectangle(final_canvas, (slot_x, slot_y), (slot_x+slot_w, slot_y+slot_h), (255,255,255), 2)
+
+            try:
+                process.stdin.write(final_canvas.tobytes())
+            except Exception as e:
+                logger.error(f"Render Error: {e}")
+                break
+
+            frame_idx += 1
+
+        cap.release()
+        process.stdin.close()
+        process.wait()
+
+    def run_debug(self,
+                  input_path,
+                  output_path,
+                  detect_target="person",
+                  ):
+        src_w, src_h, fps, total_frames = self._get_video_info(input_path)
+        target_ids = get_ids_by_names(detect_target)
+        logger.info(f"追踪类别 ID: {target_ids}")
+
+        # 1. 第一遍全量扫描：记录所有 ID 的原始轨迹
+        # raw_tracks_history = { id: { frame_idx: (x, y) } }
+        raw_tracks_history = defaultdict(dict)
+
+        cap = cv2.VideoCapture(input_path)
+        for i in range(total_frames):
+            ret, frame = cap.read()
+            if not ret: break
+
+            detections = self.detector.detect(frame, target_ids=target_ids)
+            tracks = self.tracker.update(detections, (src_h, src_w))
+
+            # 记录这一帧出现的所有 ID 及其位置
+            for t in tracks:
+                tid = t['id']
+                raw_tracks_history[tid][i] = t['bbox']
+
+            if i % 100 == 0: logger.info(f"Scanning All: {i}/{total_frames}")
+        cap.release()
+
+        debug_filename = output_path.replace("reframed_", "debug_")
+        self._render_debug_video(input_path, debug_filename, raw_tracks_history, fps)
+        # 调试模式下，生成完画框视频直接返回，不进行剪辑
+        return [debug_filename]
 
     # ==================== 模式 A: 原有的单人逻辑 ====================
     def _process_single_mode(self, input_path, output_path, ratio_str, mode, detect_target):
@@ -525,11 +880,31 @@ class SmartReframer:
         process.wait()
 
     def _safe_crop(self, frame, x, y, w, h):
-        """防止裁剪越界的 helper"""
-        max_h, max_w = frame.shape[:2]
-        x = max(0, min(x, max_w - w))
-        y = max(0, min(y, max_h - h))
-        return frame[y:y + h, x:x + w]
+        """增强版安全裁剪：越界自动补黑边"""
+        img_h, img_w = frame.shape[:2]
+
+        # 如果完全在范围内，直接切 (最快)
+        if x >= 0 and y >= 0 and x + w <= img_w and y + h <= img_h:
+            return frame[y:y + h, x:x + w]
+
+        # 否则创建画布
+        canvas = np.zeros((h, w, 3), dtype=np.uint8)
+
+        # 计算重叠区域
+        src_x1 = max(0, x)
+        src_y1 = max(0, y)
+        src_x2 = min(img_w, x + w)
+        src_y2 = min(img_h, y + h)
+
+        dst_x1 = max(0, -x)
+        dst_y1 = max(0, -y)
+        dst_x2 = dst_x1 + (src_x2 - src_x1)
+        dst_y2 = dst_y1 + (src_y2 - src_y1)
+
+        if src_x2 > src_x1 and src_y2 > src_y1:
+            canvas[dst_y1:dst_y2, dst_x1:dst_x2] = frame[src_y1:src_y2, src_x1:src_x2]
+
+        return canvas
 
     def _render_with_ffmpeg(self, input_path, output_path, camera_path, w, h, fps):
         """
