@@ -189,7 +189,7 @@ class SmartReframer:
                       detect_target="person",
                       multi_subject=False,
                       split_screen=False,
-                      max_split=3,
+                      max_split=4,
                       debug=False
                       ):
         """
@@ -221,7 +221,7 @@ class SmartReframer:
             for t in tracks:
                 # 记录 bbox [x1, y1, x2, y2]
                 raw_tracks_history[t['id']][i] = t['bbox']
-            if i % 500 == 0: logger.info(f"Scanning: {i}/{total_frames}")
+            if i % 100 == 0: logger.info(f"Scanning: {i}/{total_frames}")
         cap.release()
 
         # 筛选有效主体 (Filter Phase)
