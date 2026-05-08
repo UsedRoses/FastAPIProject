@@ -4,9 +4,6 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from common.enums import ReturnCode
-from common.public_configuration.log_configuration import LoggerData
-from models.entity.exception import BusinessException, ServiceException, InfoException, SysException
-from models.entity.response_model import ResponseModel
 
 
 async def custom_exception_handler(request: Request, exc: Exception):

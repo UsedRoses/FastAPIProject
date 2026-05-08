@@ -5,12 +5,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
-from common.public_configuration.mysql_configuration import mysql_startup, mysql_shutdown
-from common.public_configuration.redis_configuration import redis_startup, redis_shutdown
-from middleware.custom_exception_handler import custom_exception_handler
-from middleware.response_middleware import ResponseMiddleware
-from middleware.user_info_middleware import UserInfoContextMiddleware
-from utils.aiohttp_client_util import close_client
+# from middleware.custom_exception_handler import custom_exception_handler
+# from middleware.response_middleware import ResponseMiddleware
+# from middleware.user_info_middleware import UserInfoContextMiddleware
 
 
 def init_middlewares(app: FastAPI):
@@ -21,12 +18,12 @@ def init_middlewares(app: FastAPI):
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.add_middleware(UserInfoContextMiddleware)
-    app.add_middleware(ResponseMiddleware)
+    # app.add_middleware(UserInfoContextMiddleware)
+    # app.add_middleware(ResponseMiddleware)
 
 
-def register_exceptions(app: FastAPI):
-    app.add_exception_handler(Exception, custom_exception_handler)
+# def register_exceptions(app: FastAPI):
+#     app.add_exception_handler(Exception, custom_exception_handler)
 
 
 def register_routers(app: FastAPI, routers_dir: str):
@@ -58,7 +55,6 @@ async def lifespan(app: FastAPI):
 
     # await mysql_shutdown()
     # await redis_shutdown()
-    await close_client()
 
 
 app = FastAPI(title="your_fastapi_project", lifespan=lifespan)
